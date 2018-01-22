@@ -5,6 +5,7 @@ from enum import Enum
 import re
 
 END_NUMBER_REGEX = re.compile("[0-9]+([\,\.][0-9]+)?\s*$")
+REMOVE_REGEX = re.compile("((´|`)+[^>]+(´|`)+)")
 DECIMALS = 3
 
 class UnitType:
@@ -13,11 +14,14 @@ class UnitType:
         self._multiples = {}
     
     def addMultiple( self, unit, multiple ):
-        self._multiples[ multiple ] = unit;
+        self._multiples[ multiple ] = unit
         return self
         
     def getStringFromMultiple(self, value, multiple):
-        return str(round(value / multiple, DECIMALS)) + self._multiples[multiple]
+        numberString = str(round(value / multiple, DECIMALS))
+        if numberString[-2:] == ".0":
+            numberString = numberString[:-2]
+        return numberString + self._multiples[multiple]
     
     def getString( self, value ):
         sortedMultiples = sorted(self._multiples, reverse=True)
@@ -44,7 +48,10 @@ class Unit:
         self._toSIAddition = toSIAddition
     
     def toMetric( self, value ):
-        return self._unitType.getString( ( value + self._toSIAddition ) * self._toSIMultiplication)
+        SIValue = ( value + self._toSIAddition ) * self._toSIMultiplication
+        if self._toSIAddition == 0 and SIValue == 0:
+            return
+        return self._unitType.getString( SIValue )
     
     @abstractmethod
     def convert( self, message ): pass
@@ -53,7 +60,7 @@ class Unit:
 class NormalUnit( Unit ):
     def __init__( self, regex, unitType, toSIMultiplication, toSIAddition = 0 ):
         super( NormalUnit, self ).__init__(unitType, toSIMultiplication, toSIAddition)
-        self._regex = re.compile( regex + "(?![a-z])")
+        self._regex = re.compile( "(" + regex + ")(?![a-z])", re.IGNORECASE )
     
     def convert( self, message ):
         originalText = message.getText()
@@ -62,9 +69,12 @@ class NormalUnit( Unit ):
         for find in iterator:
             numberResult = END_NUMBER_REGEX.search( originalText[ 0 : find.start() ] )
             if numberResult is not None:
+                metricValue = self.toMetric( float( numberResult.group().replace(",", ".") ) ) 
+                if metricValue is None:
+                    continue
                 repl = {}
                 repl[ "start" ] = numberResult.start()
-                repl[ "text"  ] = self.toMetric( float( numberResult.group() ) ) 
+                repl[ "text"  ] = metricValue
                 repl[ "end" ] = find.end()
                 replacements.append(repl)
         if len(replacements)>0:
@@ -96,45 +106,50 @@ class ModificableMessage:
         
 units = []
 
-#Distance units
-units.append( NormalUnit("in(ch(es)?)?|\"|''", DISTANCE, 0.0254) )	#inch
-units.append( NormalUnit("f(oo|ee)?t|'", DISTANCE, 0.3048) )		#foot
-units.append( NormalUnit("mi(les?)?", DISTANCE, 1609.344) )			#mile
-
 #Area
-units.append( NormalUnit("in(ch(es)?)? ?(\^2|squared)", DISTANCE, 0.00064516) )	#inch squared
-units.append( NormalUnit("f(oo|ee)?t ?(\^2|squared)", DISTANCE, 0.092903) )		#foot squared
-units.append( NormalUnit("mi(les?)? ?(\^2|squared)", DISTANCE, 2589990) )		#mile squared
-units.append( NormalUnit("acres?", AREA, 4046.8564224 ) )						#acre
+units.append( NormalUnit("in(ch(es)?)? ?(\^2|squared)", DISTANCE, 0.00064516) )    #inch squared
+units.append( NormalUnit("f(oo|ee)?t ?(\^2|squared)", DISTANCE, 0.092903) )        #foot squared
+units.append( NormalUnit("mi(les?)? ?(\^2|squared)", DISTANCE, 2589990) )          #mile squared
+units.append( NormalUnit("acres?", AREA, 4046.8564224 ) )                          #acre
+
 #Volume
-units.append( NormalUnit( "pints?|pt|p", VOLUME, 0.473176 ) )	#pint
-units.append( NormalUnit( "quarts?|qt", VOLUME, 0.946353 ) )	#quart
-units.append( NormalUnit( "gal(lons?)?", VOLUME, 3.78541 ) )	#galon
+units.append( NormalUnit( "pints?|pt|p", VOLUME, 0.473176 ) )    #pint
+units.append( NormalUnit( "quarts?|qt", VOLUME, 0.946353 ) )    #quart
+units.append( NormalUnit( "gal(lons?)?", VOLUME, 3.78541 ) )    #galon
 
 #Energy
-units.append( NormalUnit("ft( |\*)?lbf?|foot( |-)pound", ENERGY, 1.355818) )	#foot-pound
+units.append( NormalUnit("ft( |\*)?lbf?|foot( |-)pound", ENERGY, 1.355818) )    #foot-pound
+units.append( NormalUnit("btu", ENERGY, 1055.06) )                              #btu
 
 #Force
-units.append( NormalUnit("pound( |-)?force|lbf", FORCE, 4.448222) )	#pound-force
+units.append( NormalUnit("pound( |-)?force|lbf", FORCE, 4.448222) )    #pound-force
 
 #Torque
-units.append( NormalUnit("Pound(-| )?foot|lbf( |\*)?ft", TORQUE, 1.355818) )	#pound-foot
+units.append( NormalUnit("Pound(-| )?foot|lbf( |\*)?ft", TORQUE, 1.355818) )    #pound-foot
 
 #Velocity
-units.append( NormalUnit("miles? per hour|mph", VELOCITY, 0.44704) )	#miles per hour
-
-#Mass
-units.append( NormalUnit( "ounces?|oz", MASS, 28.349523125 ) )	#ounces
-units.append( NormalUnit( "pounds?|lbs?", MASS, 453.59237 ) )	#pounds
+units.append( NormalUnit("miles? per hour|mph", VELOCITY, 0.44704) )    #miles per hour
 
 #Temperature
-units.append( NormalUnit("º?F", TEMPERATURE, 5/9, -32 ) )	#Degrees freedom
+units.append( NormalUnit("º?F|(degrees? )?farenheit", TEMPERATURE, 5/9, -32 ) )    #Degrees freedom
+
 #Pressure
 units.append( NormalUnit( "pounds?((-| )?force)? per square in(ch)?|lbf\/in\^2|psi", PRESSURE, 0.068046 ) ) #Pounds per square inch
+
+#Mass
+units.append( NormalUnit( "ounces?|oz", MASS, 28.349523125 ) )    #ounces
+units.append( NormalUnit( "pounds?|lbs?", MASS, 453.59237 ) )     #pounds
+units.append( NormalUnit( "stones?|st", MASS, 6350.2293318 ) )    #stones
+
+#Distance units
+units.append( NormalUnit("in(ch(es)?)?|\"|''", DISTANCE, 0.0254) )  #inch
+units.append( NormalUnit("f(oo|ee)?t|'", DISTANCE, 0.3048) )        #foot
+units.append( NormalUnit("mi(les?)?", DISTANCE, 1609.344) )         #mile
+units.append( NormalUnit("yd?|yards?", DISTANCE, 0.9144) )           #yard
  
 #Processes a string, converting freedom units to science units.
 def process(message):    
-    modificableMessage = ModificableMessage(message)
+    modificableMessage = ModificableMessage(REMOVE_REGEX.sub("", message))
     for u in units:
         u.convert(modificableMessage)
     if modificableMessage.isModified():
